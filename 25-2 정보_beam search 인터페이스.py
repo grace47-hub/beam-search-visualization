@@ -133,6 +133,52 @@ def topk_from_logits(logits: torch.Tensor, k: int) -> Tuple[np.ndarray, np.ndarr
     return topk_ids.detach().cpu().numpy(), topk_probs.detach().cpu().numpy()
 
 
+def topk_from_logits_filtered(
+    tokenizer, 
+    logits: torch.Tensor, 
+    k: int
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    logits에서 상위 k개 토큰 추출 (출력 가능한 토큰만)
+    
+    특수 문자나 제어 문자는 제외하고 일반 텍스트만 반환
+    
+    Args:
+        tokenizer: 토크나이저
+        logits: [vocab_size] 크기의 텐서
+        k: 추출할 토큰 개수
+    
+    Returns:
+        (filtered_ids, filtered_probs): 출력 가능한 토큰만 포함
+    """
+    probs = F.softmax(logits, dim=-1)
+    
+    # k의 3배 정도 후보를 뽑아서 필터링 후 k개 선택
+    # (특수 토큰 제외하면 부족할 수 있으므로)
+    candidate_k = min(k * 3, probs.numel())
+    topk_probs, topk_ids = torch.topk(probs, k=candidate_k)
+    
+    # 출력 가능한 토큰만 필터링
+    filtered_ids = []
+    filtered_probs = []
+    
+    for tid, prob in zip(topk_ids.tolist(), topk_probs.tolist()):
+        token_str = safe_token_str(tokenizer, tid)
+        
+        # <숫자> 형태가 아니면 출력 가능한 토큰
+        # (safe_token_str이 <ID> 형태로 반환하면 특수 토큰)
+        if not (token_str.startswith('<') and token_str.endswith('>')):
+            filtered_ids.append(tid)
+            filtered_probs.append(prob)
+            
+            # k개 모으면 종료
+            if len(filtered_ids) >= k:
+                break
+    
+    # 부족하면 있는 만큼만 반환
+    return np.array(filtered_ids), np.array(filtered_probs)
+
+
 @dataclass
 class StepTokenInfo:
     """각 생성 단계의 토큰 정보"""
@@ -234,7 +280,8 @@ def greedy_decode(
             chosen_prob = float(probs[chosen_id].item())
             cumulative_logprob += float(torch.log(probs[chosen_id] + 1e-12).item())
             
-            top_ids, top_probs = topk_from_logits(logits, top_n)
+            # 히트맵용: 출력 가능한 토큰만 추출
+            top_ids, top_probs = topk_from_logits_filtered(tokenizer, logits, top_n)
             
             info = StepTokenInfo(
                 step=step,
@@ -361,7 +408,8 @@ def beam_decode(
                 chosen_id = best.token_ids[-1]
                 chosen_prob = float(probs_best[chosen_id].item())
                 
-                top_ids_vis, top_probs_vis = topk_from_logits(logits_best, top_n)
+                # 히트맵용: 출력 가능한 토큰만 추출
+                top_ids_vis, top_probs_vis = topk_from_logits_filtered(tokenizer, logits_best, top_n)
                 bestpath_steps.append(
                     StepTokenInfo(
                         step=step,

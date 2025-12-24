@@ -5,6 +5,7 @@ Greedy Search vs Beam Search 기반 단어 선택 과정의 실시간 시각화
 
 import math
 import warnings
+import platform
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Any, Optional
 
@@ -13,11 +14,56 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import streamlit as st
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 warnings.filterwarnings('ignore')
+
+# ----------------------------
+# 한글 폰트 설정 (글자 깨짐 방지)
+# ----------------------------
+def setup_korean_font():
+    """
+    시스템에 설치된 한글 폰트를 자동으로 찾아 matplotlib에 설정
+    Windows, Mac, Linux 모두 지원
+    """
+    system = platform.system()
+    
+    # 시스템별 우선 폰트 목록
+    font_candidates = []
+    
+    if system == 'Windows':
+        font_candidates = ['Malgun Gothic', 'NanumGothic', 'NanumBarunGothic', 'Gulim']
+    elif system == 'Darwin':  # macOS
+        font_candidates = ['AppleGothic', 'Apple SD Gothic Neo', 'NanumGothic']
+    else:  # Linux
+        font_candidates = ['NanumGothic', 'NanumBarunGothic', 'UnDotum', 'Noto Sans CJK KR']
+    
+    # 설치된 폰트 중에서 찾기
+    available_fonts = [f.name for f in fm.fontManager.ttflist]
+    
+    selected_font = None
+    for font in font_candidates:
+        if font in available_fonts:
+            selected_font = font
+            break
+    
+    # 폰트 설정
+    if selected_font:
+        plt.rcParams['font.family'] = selected_font
+    else:
+        # 폰트를 못 찾으면 기본 설정
+        plt.rcParams['font.family'] = 'DejaVu Sans'
+    
+    # 마이너스 기호 깨짐 방지
+    plt.rcParams['axes.unicode_minus'] = False
+    
+    return selected_font
+
+# 앱 시작 시 한 번만 실행
+KOREAN_FONT = setup_korean_font()
 
 # ----------------------------
 # Configuration
@@ -101,7 +147,7 @@ class BeamStepInfo:
 def load_model(model_name: str):
     """모델과 토크나이저 로딩 (캐싱됨)"""
     try:
-        with st.spinner(f" {model_name} 모델 로딩 중..."):
+        with st.spinner(f"모델 로딩 중: {model_name}..."):
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name)
             
@@ -112,7 +158,7 @@ def load_model(model_name: str):
             model.eval()
             return tokenizer, model
     except Exception as e:
-        st.error(f" 모델 로딩 실패: {str(e)}")
+        st.error(f"모델 로딩 실패: {str(e)}")
         st.stop()
 
 
@@ -198,7 +244,7 @@ def greedy_decode(
         }
     
     except Exception as e:
-        st.error(f" Greedy 디코딩 중 오류: {str(e)}")
+        st.error(f"❌ Greedy 디코딩 중 오류: {str(e)}")
         return None
 
 
@@ -336,7 +382,7 @@ def beam_decode(
         }
     
     except Exception as e:
-        st.error(f" Beam 디코딩 중 오류: {str(e)}")
+        st.error(f"❌ Beam 디코딩 중 오류: {str(e)}")
         return None
 
 
@@ -389,39 +435,65 @@ def plot_heatmap(
     token_texts: List[List[str]], 
     title: str
 ):
-    """토큰 확률 히트맵 그리기"""
+    """토큰 확률 히트맵 그리기 (한글 지원 개선)"""
     if mat.size == 0:
         return None
     
-    fig, ax = plt.subplots(figsize=(12, max(4, 0.5 * len(y_labels))))
+    # 동적 크기 계산 (step 수에 따라 높이 조정)
+    height = max(6, min(0.6 * len(y_labels), 20))
+    width = max(10, min(len(x_labels) * 0.8, 16))
+    
+    fig, ax = plt.subplots(figsize=(width, height))
     im = ax.imshow(mat, aspect="auto", cmap="YlOrRd")
     
-    ax.set_title(title, fontsize=14, pad=20)
+    # 제목 설정
+    ax.set_title(title, fontsize=14, pad=20, fontweight='bold')
+    
+    # Y축 레이블 (Step)
     ax.set_yticks(range(len(y_labels)))
-    ax.set_yticklabels(y_labels, fontsize=9)
+    ax.set_yticklabels(y_labels, fontsize=10)
+    ax.set_ylabel('생성 단계', fontsize=11, fontweight='bold')
+    
+    # X축 레이블 (Rank)
     ax.set_xticks(range(len(x_labels)))
     ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=9)
+    ax.set_xlabel('토큰 순위', fontsize=11, fontweight='bold')
     
-    # 셀에 토큰 문자열 표시 (확률 생략 - 칼라맵으로 표현)
-    for i in range(min(mat.shape[0], 20)):  # 최대 20개 step만 텍스트 표시
+    # 셀에 토큰 문자열 표시 (step 수가 많으면 일부만)
+    max_show_steps = min(25, len(y_labels))  # 최대 25개 step만 텍스트 표시
+    
+    for i in range(max_show_steps):
         for j in range(mat.shape[1]):
             tok = token_texts[i][j]
-            if len(tok) > 8:
+            
+            # 토큰 문자열 길이 제한
+            if len(tok) > 10:
                 tok = tok[:8] + "…"
             
             # 배경색에 따라 텍스트 색상 결정
             text_color = "white" if mat[i, j] > 0.5 else "black"
+            
+            # 확률값 표시 (높은 확률만)
+            if mat[i, j] > 0.1:  # 10% 이상만 표시
+                label = f"{tok}\n{mat[i,j]:.2f}"
+            else:
+                label = tok
+            
             ax.text(
-                j, i, tok, 
-                ha="center", va="center", 
-                fontsize=7, color=text_color,
-                weight="bold"
+                j, i, label,
+                ha="center", va="center",
+                fontsize=8, color=text_color,
+                weight="bold" if mat[i, j] > 0.3 else "normal"
             )
     
-    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.02)
-    cbar.set_label("확률", rotation=270, labelpad=15)
+    # 컬러바 설정
+    cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
+    cbar.set_label("확률", rotation=270, labelpad=20, fontsize=10)
+    cbar.ax.tick_params(labelsize=9)
     
-    fig.tight_layout()
+    # 레이아웃 최적화 (빈칸 제거)
+    plt.tight_layout()
+    
     return fig
 
 
@@ -516,12 +588,20 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    st.title(" LLM 디코딩 결정 시각화")
+    st.title("LLM 디코딩 결정 시각화")
     st.markdown("**Greedy Search vs Beam Search** - 단어 선택 과정의 실시간 시각화")
+    
+    # 폰트 상태 표시 (접을 수 있게)
+    with st.expander("시스템 정보", expanded=False):
+        if KOREAN_FONT:
+            st.success(f"한글 폰트: {KOREAN_FONT} (그래프 한글 표시 가능)")
+        else:
+            st.warning("한글 폰트를 찾을 수 없습니다. 그래프는 영문으로 표시됩니다.")
+        st.info(f"시스템: {platform.system()}")
     
     # 사이드바 컨트롤
     with st.sidebar:
-        st.header(" 설정")
+        st.header("설정")
         
         model_key = st.selectbox(
             "모델 선택",
@@ -540,7 +620,7 @@ def main():
         )
         
         if not prompt.strip():
-            st.warning(" 프롬프트를 입력해주세요!")
+            st.warning("프롬프트를 입력해주세요!")
         
         st.markdown("---")
         
@@ -586,18 +666,18 @@ def main():
         
         col1, col2 = st.columns(2)
         with col1:
-            run_btn = st.button(" 실행", use_container_width=True, type="primary")
+            run_btn = st.button("실행", use_container_width=True, type="primary")
         with col2:
-            compare_btn = st.button(" 비교 실험", use_container_width=True)
+            compare_btn = st.button("비교 실험", use_container_width=True)
         
         st.markdown("---")
-        st.caption(" Beam Width = 1일 때 Greedy와 동일합니다")
+        st.caption("Beam Width = 1일 때 Greedy와 동일합니다")
     
     # 모델 로딩
     if prompt.strip():
         tokenizer, model = load_model(model_key)
     else:
-        st.info(" 사이드바에서 설정을 조정한 후 실행 버튼을 눌러주세요.")
+        st.info("👈 사이드바에서 설정을 조정한 후 실행 버튼을 눌러주세요.")
         return
     
     # 단일 실행
@@ -633,18 +713,18 @@ def main():
         
         # 결과 표시
         st.markdown("---")
-        st.subheader(" 생성된 텍스트")
+        st.subheader("생성된 텍스트")
         st.info(result["text"])
         
         # Greedy 결과
         if decoding == "Greedy":
             st.markdown("---")
-            st.subheader(" 단계별 토큰 선택")
+            st.subheader("단계별 토큰 선택")
             df = steps_to_table(result["steps"])
             st.dataframe(df, use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            st.subheader(" 토큰 확률 히트맵")
+            st.subheader("토큰 확률 히트맵")
             st.caption("각 단계에서 상위 확률을 가진 토큰들의 분포")
             
             mat, ylab, xlab, tok_texts = build_heatmap_data(result["steps"], tokenizer)
@@ -665,13 +745,13 @@ def main():
         # Beam 결과
         else:
             st.markdown("---")
-            st.subheader(" 최고 경로 단계별 선택")
+            st.subheader("최고 경로 단계별 선택")
             st.caption("Beam Search에서 최종적으로 선택된 경로의 단계별 토큰")
             df = steps_to_table(result["bestpath_steps"])
             st.dataframe(df, use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            st.subheader(" 토큰 확률 히트맵 (최고 경로)")
+            st.subheader("토큰 확률 히트맵 (최고 경로)")
             mat, ylab, xlab, tok_texts = build_heatmap_data(result["bestpath_steps"], tokenizer)
             fig = plot_heatmap(
                 mat, ylab, xlab, tok_texts,
@@ -681,7 +761,7 @@ def main():
                 st.pyplot(fig)
             
             st.markdown("---")
-            st.subheader(" Beam 탐색 요약")
+            st.subheader("Beam 탐색 요약")
             
             summary_rows = []
             for bs in result["beam_steps"]:
@@ -695,7 +775,7 @@ def main():
             
             # Beam 트리 시각화 시도
             st.markdown("---")
-            st.subheader(" Beam Search 트리")
+            st.subheader("Beam Search 트리")
             
             dot_str = try_graphviz_tree(tokenizer, prompt, result["beam_steps"], max_show=3)
             
@@ -703,12 +783,12 @@ def main():
                 try:
                     st.graphviz_chart(dot_str)
                 except Exception as e:
-                    st.warning(f" Graphviz 렌더링 실패: {str(e)}")
-                    st.info(" 대신 테이블 형태로 표시합니다.")
+                    st.warning(f"Graphviz 렌더링 실패: {str(e)}")
+                    st.info("대신 테이블 형태로 표시합니다.")
                     tree_df = beam_to_simple_tree_table(tokenizer, prompt, result["beam_steps"])
                     st.dataframe(tree_df, use_container_width=True, hide_index=True)
             else:
-                st.info(" Graphviz가 설치되지 않아 테이블 형태로 표시합니다.")
+                st.info("Graphviz가 설치되지 않아 테이블 형태로 표시합니다.")
                 tree_df = beam_to_simple_tree_table(tokenizer, prompt, result["beam_steps"])
                 st.dataframe(tree_df, use_container_width=True, hide_index=True)
             
@@ -723,14 +803,14 @@ def main():
             with col4:
                 st.metric("제거 후보 수", result['total_pruned'])
             
-            with st.expander(" 최종 유지된 후보들 (상위 5개)"):
+            with st.expander("최종 유지된 후보들 (상위 5개)"):
                 for i, text in enumerate(result["final_candidates"], 1):
                     st.write(f"**{i}.** {text}")
     
     # 비교 실험
     if compare_btn and prompt.strip():
         st.markdown("---")
-        st.header(" 자동 비교 실험: Beam Width = 1, 3, 5")
+        st.header("자동 비교 실험: Beam Width = 1, 3, 5")
         
         set_seed(42)
         widths = [1, 3, 5]
@@ -766,53 +846,89 @@ def main():
             
             # 그래프
             st.markdown("---")
-            st.subheader(" 비교 그래프")
+            st.subheader("비교 그래프")
             
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                fig1, ax1 = plt.subplots(figsize=(5, 4))
+                fig1, ax1 = plt.subplots(figsize=(6, 4.5))
                 ax1.plot(
                     [r["Beam Width"] for r in results_data],
                     [r["탐색 후보 수"] for r in results_data],
-                    marker="o", linewidth=2, markersize=8
+                    marker="o", linewidth=2.5, markersize=10,
+                    color='#1f77b4', markerfacecolor='white', 
+                    markeredgewidth=2
                 )
-                ax1.set_title("Beam Width vs 탐색 후보 수")
-                ax1.set_xlabel("Beam Width")
-                ax1.set_ylabel("탐색 후보 수")
-                ax1.grid(True, alpha=0.3)
+                ax1.set_title("Beam Width vs 탐색 후보 수", fontsize=12, fontweight='bold', pad=15)
+                ax1.set_xlabel("Beam Width", fontsize=11, fontweight='bold')
+                ax1.set_ylabel("탐색 후보 수", fontsize=11, fontweight='bold')
+                ax1.grid(True, alpha=0.3, linestyle='--')
+                ax1.tick_params(labelsize=10)
+                # 값 레이블 추가
+                for i, r in enumerate(results_data):
+                    ax1.annotate(
+                        str(r["탐색 후보 수"]), 
+                        ([r["Beam Width"] for r in results_data][i], r["탐색 후보 수"]),
+                        textcoords="offset points", xytext=(0,10), ha='center',
+                        fontsize=9, fontweight='bold'
+                    )
+                plt.tight_layout()
                 st.pyplot(fig1)
             
             with col2:
-                fig2, ax2 = plt.subplots(figsize=(5, 4))
+                fig2, ax2 = plt.subplots(figsize=(6, 4.5))
                 logprobs = [float(r["최종 로그확률"]) for r in results_data]
                 ax2.plot(
                     [r["Beam Width"] for r in results_data],
                     logprobs,
-                    marker="o", linewidth=2, markersize=8, color="green"
+                    marker="o", linewidth=2.5, markersize=10,
+                    color='#2ca02c', markerfacecolor='white',
+                    markeredgewidth=2
                 )
-                ax2.set_title("Beam Width vs 최종 로그확률")
-                ax2.set_xlabel("Beam Width")
-                ax2.set_ylabel("최종 로그확률")
-                ax2.grid(True, alpha=0.3)
+                ax2.set_title("Beam Width vs 최종 로그확률", fontsize=12, fontweight='bold', pad=15)
+                ax2.set_xlabel("Beam Width", fontsize=11, fontweight='bold')
+                ax2.set_ylabel("최종 로그확률", fontsize=11, fontweight='bold')
+                ax2.grid(True, alpha=0.3, linestyle='--')
+                ax2.tick_params(labelsize=10)
+                # 값 레이블 추가
+                for i, r in enumerate(results_data):
+                    ax2.annotate(
+                        f"{logprobs[i]:.1f}", 
+                        ([r["Beam Width"] for r in results_data][i], logprobs[i]),
+                        textcoords="offset points", xytext=(0,10), ha='center',
+                        fontsize=9, fontweight='bold'
+                    )
+                plt.tight_layout()
                 st.pyplot(fig2)
             
             with col3:
-                fig3, ax3 = plt.subplots(figsize=(5, 4))
+                fig3, ax3 = plt.subplots(figsize=(6, 4.5))
                 ax3.plot(
                     [r["Beam Width"] for r in results_data],
                     [r["다양성"] for r in results_data],
-                    marker="o", linewidth=2, markersize=8, color="orange"
+                    marker="o", linewidth=2.5, markersize=10,
+                    color='#ff7f0e', markerfacecolor='white',
+                    markeredgewidth=2
                 )
-                ax3.set_title("Beam Width vs 다양성")
-                ax3.set_xlabel("Beam Width")
-                ax3.set_ylabel("다양성 (고유 출력 수)")
-                ax3.grid(True, alpha=0.3)
+                ax3.set_title("Beam Width vs 다양성", fontsize=12, fontweight='bold', pad=15)
+                ax3.set_xlabel("Beam Width", fontsize=11, fontweight='bold')
+                ax3.set_ylabel("다양성 (고유 출력 수)", fontsize=11, fontweight='bold')
+                ax3.grid(True, alpha=0.3, linestyle='--')
+                ax3.tick_params(labelsize=10)
+                # 값 레이블 추가
+                for i, r in enumerate(results_data):
+                    ax3.annotate(
+                        str(r["다양성"]), 
+                        ([r["Beam Width"] for r in results_data][i], r["다양성"]),
+                        textcoords="offset points", xytext=(0,10), ha='center',
+                        fontsize=9, fontweight='bold'
+                    )
+                plt.tight_layout()
                 st.pyplot(fig3)
             
             st.markdown("---")
             st.info("""
-             관찰 포인트
+            **관찰 포인트**
             - Beam Width가 증가하면 탐색 후보 수(계산 비용)가 증가합니다.
             - 하지만 최종 로그확률과 다양성은 특정 지점 이후 크게 개선되지 않을 수 있습니다.
             - 이는 Beam Search의 효과가 상황에 따라 제한적임을 보여줍니다.
@@ -820,5 +936,4 @@ def main():
 
 
 if __name__ == "__main__":
-
     main()

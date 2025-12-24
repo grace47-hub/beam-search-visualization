@@ -101,7 +101,7 @@ class BeamStepInfo:
 def load_model(model_name: str):
     """모델과 토크나이저 로딩 (캐싱됨)"""
     try:
-        with st.spinner(f"🔄 {model_name} 모델 로딩 중..."):
+        with st.spinner(f" {model_name} 모델 로딩 중..."):
             tokenizer = AutoTokenizer.from_pretrained(model_name)
             model = AutoModelForCausalLM.from_pretrained(model_name)
             
@@ -112,7 +112,7 @@ def load_model(model_name: str):
             model.eval()
             return tokenizer, model
     except Exception as e:
-        st.error(f"❌ 모델 로딩 실패: {str(e)}")
+        st.error(f" 모델 로딩 실패: {str(e)}")
         st.stop()
 
 
@@ -198,7 +198,7 @@ def greedy_decode(
         }
     
     except Exception as e:
-        st.error(f"❌ Greedy 디코딩 중 오류: {str(e)}")
+        st.error(f" Greedy 디코딩 중 오류: {str(e)}")
         return None
 
 
@@ -336,7 +336,7 @@ def beam_decode(
         }
     
     except Exception as e:
-        st.error(f"❌ Beam 디코딩 중 오류: {str(e)}")
+        st.error(f" Beam 디코딩 중 오류: {str(e)}")
         return None
 
 
@@ -516,12 +516,12 @@ def main():
         initial_sidebar_state="expanded"
     )
     
-    st.title("🔍 LLM 디코딩 결정 시각화")
+    st.title(" LLM 디코딩 결정 시각화")
     st.markdown("**Greedy Search vs Beam Search** - 단어 선택 과정의 실시간 시각화")
     
     # 사이드바 컨트롤
     with st.sidebar:
-        st.header("⚙️ 설정")
+        st.header(" 설정")
         
         model_key = st.selectbox(
             "모델 선택",
@@ -540,7 +540,7 @@ def main():
         )
         
         if not prompt.strip():
-            st.warning("⚠️ 프롬프트를 입력해주세요!")
+            st.warning(" 프롬프트를 입력해주세요!")
         
         st.markdown("---")
         
@@ -586,18 +586,18 @@ def main():
         
         col1, col2 = st.columns(2)
         with col1:
-            run_btn = st.button("▶️ 실행", use_container_width=True, type="primary")
+            run_btn = st.button(" 실행", use_container_width=True, type="primary")
         with col2:
-            compare_btn = st.button("📊 비교 실험", use_container_width=True)
+            compare_btn = st.button(" 비교 실험", use_container_width=True)
         
         st.markdown("---")
-        st.caption("💡 Beam Width = 1일 때 Greedy와 동일합니다")
+        st.caption(" Beam Width = 1일 때 Greedy와 동일합니다")
     
     # 모델 로딩
     if prompt.strip():
         tokenizer, model = load_model(model_key)
     else:
-        st.info("👈 사이드바에서 설정을 조정한 후 실행 버튼을 눌러주세요.")
+        st.info(" 사이드바에서 설정을 조정한 후 실행 버튼을 눌러주세요.")
         return
     
     # 단일 실행
@@ -633,18 +633,18 @@ def main():
         
         # 결과 표시
         st.markdown("---")
-        st.subheader("📝 생성된 텍스트")
+        st.subheader(" 생성된 텍스트")
         st.info(result["text"])
         
         # Greedy 결과
         if decoding == "Greedy":
             st.markdown("---")
-            st.subheader("📊 단계별 토큰 선택")
+            st.subheader(" 단계별 토큰 선택")
             df = steps_to_table(result["steps"])
             st.dataframe(df, use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            st.subheader("🔥 토큰 확률 히트맵")
+            st.subheader(" 토큰 확률 히트맵")
             st.caption("각 단계에서 상위 확률을 가진 토큰들의 분포")
             
             mat, ylab, xlab, tok_texts = build_heatmap_data(result["steps"], tokenizer)
@@ -665,13 +665,13 @@ def main():
         # Beam 결과
         else:
             st.markdown("---")
-            st.subheader("📊 최고 경로 단계별 선택")
+            st.subheader(" 최고 경로 단계별 선택")
             st.caption("Beam Search에서 최종적으로 선택된 경로의 단계별 토큰")
             df = steps_to_table(result["bestpath_steps"])
             st.dataframe(df, use_container_width=True, hide_index=True)
             
             st.markdown("---")
-            st.subheader("🔥 토큰 확률 히트맵 (최고 경로)")
+            st.subheader(" 토큰 확률 히트맵 (최고 경로)")
             mat, ylab, xlab, tok_texts = build_heatmap_data(result["bestpath_steps"], tokenizer)
             fig = plot_heatmap(
                 mat, ylab, xlab, tok_texts,
@@ -681,7 +681,7 @@ def main():
                 st.pyplot(fig)
             
             st.markdown("---")
-            st.subheader("🌳 Beam 탐색 요약")
+            st.subheader(" Beam 탐색 요약")
             
             summary_rows = []
             for bs in result["beam_steps"]:
@@ -695,7 +695,7 @@ def main():
             
             # Beam 트리 시각화 시도
             st.markdown("---")
-            st.subheader("🌲 Beam Search 트리")
+            st.subheader(" Beam Search 트리")
             
             dot_str = try_graphviz_tree(tokenizer, prompt, result["beam_steps"], max_show=3)
             
@@ -703,12 +703,12 @@ def main():
                 try:
                     st.graphviz_chart(dot_str)
                 except Exception as e:
-                    st.warning(f"⚠️ Graphviz 렌더링 실패: {str(e)}")
-                    st.info("📋 대신 테이블 형태로 표시합니다.")
+                    st.warning(f" Graphviz 렌더링 실패: {str(e)}")
+                    st.info(" 대신 테이블 형태로 표시합니다.")
                     tree_df = beam_to_simple_tree_table(tokenizer, prompt, result["beam_steps"])
                     st.dataframe(tree_df, use_container_width=True, hide_index=True)
             else:
-                st.info("📋 Graphviz가 설치되지 않아 테이블 형태로 표시합니다.")
+                st.info(" Graphviz가 설치되지 않아 테이블 형태로 표시합니다.")
                 tree_df = beam_to_simple_tree_table(tokenizer, prompt, result["beam_steps"])
                 st.dataframe(tree_df, use_container_width=True, hide_index=True)
             
@@ -723,14 +723,14 @@ def main():
             with col4:
                 st.metric("제거 후보 수", result['total_pruned'])
             
-            with st.expander("🔍 최종 유지된 후보들 (상위 5개)"):
+            with st.expander(" 최종 유지된 후보들 (상위 5개)"):
                 for i, text in enumerate(result["final_candidates"], 1):
                     st.write(f"**{i}.** {text}")
     
     # 비교 실험
     if compare_btn and prompt.strip():
         st.markdown("---")
-        st.header("📊 자동 비교 실험: Beam Width = 1, 3, 5")
+        st.header(" 자동 비교 실험: Beam Width = 1, 3, 5")
         
         set_seed(42)
         widths = [1, 3, 5]
@@ -766,7 +766,7 @@ def main():
             
             # 그래프
             st.markdown("---")
-            st.subheader("📈 비교 그래프")
+            st.subheader(" 비교 그래프")
             
             col1, col2, col3 = st.columns(3)
             
@@ -812,7 +812,7 @@ def main():
             
             st.markdown("---")
             st.info("""
-            📌 **관찰 포인트**
+             관찰 포인트
             - Beam Width가 증가하면 탐색 후보 수(계산 비용)가 증가합니다.
             - 하지만 최종 로그확률과 다양성은 특정 지점 이후 크게 개선되지 않을 수 있습니다.
             - 이는 Beam Search의 효과가 상황에 따라 제한적임을 보여줍니다.
@@ -820,4 +820,5 @@ def main():
 
 
 if __name__ == "__main__":
+
     main()

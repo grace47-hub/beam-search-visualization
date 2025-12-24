@@ -139,34 +139,36 @@ def topk_from_logits_filtered(
     k: int
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    logits에서 상위 k개 토큰 추출 (출력 가능한 토큰만)
+    logits에서 상위 k개 토큰 추출 (출력 가능한 토큰 우선)
     
-    특수 문자나 제어 문자는 제외하고 일반 텍스트만 반환
+    특수 문자나 제어 문자는 제외하고 일반 텍스트를 우선 반환하되,
+    k개를 채우지 못하면 특수 토큰도 포함하여 정확히 k개 반환
     
     Args:
         tokenizer: 토크나이저
         logits: [vocab_size] 크기의 텐서
-        k: 추출할 토큰 개수
+        k: 추출할 토큰 개수 (정확히 이 개수만큼 반환)
     
     Returns:
-        (filtered_ids, filtered_probs): 출력 가능한 토큰만 포함
+        (filtered_ids, filtered_probs): 정확히 k개의 토큰
     """
     probs = F.softmax(logits, dim=-1)
     
-    # k의 3배 정도 후보를 뽑아서 필터링 후 k개 선택
-    # (특수 토큰 제외하면 부족할 수 있으므로)
-    candidate_k = min(k * 3, probs.numel())
+    # 충분히 많은 후보를 뽑기
+    candidate_k = min(k * 5, probs.numel())  # k의 5배로 증가
     topk_probs, topk_ids = torch.topk(probs, k=candidate_k)
     
-    # 출력 가능한 토큰만 필터링
+    topk_ids_list = topk_ids.tolist()
+    topk_probs_list = topk_probs.tolist()
+    
+    # 1단계: 출력 가능한 토큰만 필터링
     filtered_ids = []
     filtered_probs = []
     
-    for tid, prob in zip(topk_ids.tolist(), topk_probs.tolist()):
+    for tid, prob in zip(topk_ids_list, topk_probs_list):
         token_str = safe_token_str(tokenizer, tid)
         
         # <숫자> 형태가 아니면 출력 가능한 토큰
-        # (safe_token_str이 <ID> 형태로 반환하면 특수 토큰)
         if not (token_str.startswith('<') and token_str.endswith('>')):
             filtered_ids.append(tid)
             filtered_probs.append(prob)
@@ -175,8 +177,26 @@ def topk_from_logits_filtered(
             if len(filtered_ids) >= k:
                 break
     
-    # 부족하면 있는 만큼만 반환
-    return np.array(filtered_ids), np.array(filtered_probs)
+    # 2단계: k개가 안 되면 원래 topk에서 부족한 만큼 채우기
+    if len(filtered_ids) < k:
+        # 이미 추가된 토큰 제외
+        filtered_set = set(filtered_ids)
+        
+        for tid, prob in zip(topk_ids_list, topk_probs_list):
+            if tid not in filtered_set:
+                filtered_ids.append(tid)
+                filtered_probs.append(prob)
+                
+                if len(filtered_ids) >= k:
+                    break
+    
+    # 3단계: 그래도 부족하면 (거의 발생 안 함) 패딩
+    while len(filtered_ids) < k:
+        filtered_ids.append(0)  # 패딩 토큰
+        filtered_probs.append(0.0)
+    
+    # 정확히 k개만 반환
+    return np.array(filtered_ids[:k]), np.array(filtered_probs[:k])
 
 
 @dataclass

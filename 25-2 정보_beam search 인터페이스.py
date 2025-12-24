@@ -86,14 +86,35 @@ def set_seed(seed: int = 42):
 
 
 def safe_token_str(tokenizer, token_id: int) -> str:
-    """토큰을 안전하게 문자열로 변환"""
+    """토큰을 안전하게 문자열로 변환 (특수문자/깨진 문자 제거)"""
     try:
-        s = tokenizer.decode([token_id])
-        # 보기 좋게 공백/개행 정리
+        # 디코딩 시 에러 무시
+        s = tokenizer.decode([token_id], errors='ignore')
+        
+        # 기본 공백/개행 정리
         s = s.replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-        return s if s.strip() else f"<token_{token_id}>"
+        
+        # 출력 불가능한 문자 제거 (�, 제어문자 등)
+        # printable ASCII + 일부 확장 문자만 허용
+        cleaned = ''.join(char for char in s if char.isprintable() or char in [' '])
+        
+        # replacement character (�) 명시적 제거
+        cleaned = cleaned.replace('�', '')
+        cleaned = cleaned.replace('\ufffd', '')  # Unicode replacement character
+        
+        # 빈 문자열이면 토큰 ID로 표시
+        cleaned = cleaned.strip()
+        if not cleaned:
+            return f"<{token_id}>"
+        
+        # 너무 긴 토큰은 잘라내기
+        if len(cleaned) > 15:
+            cleaned = cleaned[:12] + "..."
+            
+        return cleaned
+        
     except Exception:
-        return f"<token_{token_id}>"
+        return f"<{token_id}>"
 
 
 def topk_from_logits(logits: torch.Tensor, k: int) -> Tuple[np.ndarray, np.ndarray]:
@@ -234,7 +255,9 @@ def greedy_decode(
             if tokenizer.eos_token_id is not None and chosen_id == tokenizer.eos_token_id:
                 break
         
-        text_out = tokenizer.decode(generated[0], skip_special_tokens=True)
+        # 안전하게 최종 텍스트 디코딩
+        text_out = tokenizer.decode(generated[0], skip_special_tokens=True, errors='ignore')
+        text_out = text_out.replace('�', '').replace('\ufffd', '')
         
         return {
             "text": text_out,
@@ -357,16 +380,22 @@ def beam_decode(
                 best.token_ids[-1] == tokenizer.eos_token_id):
                 break
         
-        # 최종 결과
+        # 최종 결과 (안전하게 디코딩)
         best = beams[0]
         full_ids = base_ids + best.token_ids
-        text_out = tokenizer.decode(full_ids, skip_special_tokens=True)
+        text_out = tokenizer.decode(full_ids, skip_special_tokens=True, errors='ignore')
+        text_out = text_out.replace('�', '').replace('\ufffd', '')
         
         # 다양성: 최종 beam들의 고유 출력 개수
         final_texts = []
         for b in beams:
             ids = base_ids + b.token_ids
-            final_texts.append(tokenizer.decode(ids, skip_special_tokens=True))
+            try:
+                decoded = tokenizer.decode(ids, skip_special_tokens=True, errors='ignore')
+                decoded = decoded.replace('�', '').replace('\ufffd', '')
+                final_texts.append(decoded)
+            except Exception:
+                final_texts.append("[error]")
         diversity = len(set(final_texts))
         
         return {
@@ -435,46 +464,46 @@ def plot_heatmap(
     token_texts: List[List[str]], 
     title: str
 ):
-    """토큰 확률 히트맵 그리기 (한글 지원 개선)"""
+    """Generate token probability heatmap (English labels)"""
     if mat.size == 0:
         return None
     
-    # 동적 크기 계산 (step 수에 따라 높이 조정)
+    # Dynamic size calculation
     height = max(6, min(0.6 * len(y_labels), 20))
     width = max(10, min(len(x_labels) * 0.8, 16))
     
     fig, ax = plt.subplots(figsize=(width, height))
     im = ax.imshow(mat, aspect="auto", cmap="YlOrRd")
     
-    # 제목 설정
+    # Title
     ax.set_title(title, fontsize=14, pad=20, fontweight='bold')
     
-    # Y축 레이블 (Step)
+    # Y-axis label (Steps)
     ax.set_yticks(range(len(y_labels)))
     ax.set_yticklabels(y_labels, fontsize=10)
-    ax.set_ylabel('생성 단계', fontsize=11, fontweight='bold')
+    ax.set_ylabel('Generation Step', fontsize=11, fontweight='bold')
     
-    # X축 레이블 (Rank)
+    # X-axis label (Rank)
     ax.set_xticks(range(len(x_labels)))
     ax.set_xticklabels(x_labels, rotation=45, ha="right", fontsize=9)
-    ax.set_xlabel('토큰 순위', fontsize=11, fontweight='bold')
+    ax.set_xlabel('Token Rank', fontsize=11, fontweight='bold')
     
-    # 셀에 토큰 문자열 표시 (step 수가 많으면 일부만)
-    max_show_steps = min(25, len(y_labels))  # 최대 25개 step만 텍스트 표시
+    # Display token text in cells
+    max_show_steps = min(25, len(y_labels))
     
     for i in range(max_show_steps):
         for j in range(mat.shape[1]):
             tok = token_texts[i][j]
             
-            # 토큰 문자열 길이 제한
+            # Limit token string length
             if len(tok) > 10:
                 tok = tok[:8] + "…"
             
-            # 배경색에 따라 텍스트 색상 결정
+            # Text color based on background
             text_color = "white" if mat[i, j] > 0.5 else "black"
             
-            # 확률값 표시 (높은 확률만)
-            if mat[i, j] > 0.1:  # 10% 이상만 표시
+            # Show probability only for high values
+            if mat[i, j] > 0.1:
                 label = f"{tok}\n{mat[i,j]:.2f}"
             else:
                 label = tok
@@ -486,12 +515,12 @@ def plot_heatmap(
                 weight="bold" if mat[i, j] > 0.3 else "normal"
             )
     
-    # 컬러바 설정
+    # Colorbar
     cbar = fig.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
-    cbar.set_label("확률", rotation=270, labelpad=20, fontsize=10)
+    cbar.set_label("Probability", rotation=270, labelpad=20, fontsize=10)
     cbar.ax.tick_params(labelsize=9)
     
-    # 레이아웃 최적화 (빈칸 제거)
+    # Optimize layout
     plt.tight_layout()
     
     return fig
@@ -511,10 +540,20 @@ def beam_to_simple_tree_table(
     for bs in beam_steps:
         shown = bs.kept_beams[:max_show]
         for rank, b in enumerate(shown, 1):
-            text = tokenizer.decode(
-                tokenizer.encode(prompt, add_special_tokens=False) + b.token_ids,
-                skip_special_tokens=True
-            )
+            # 안전하게 디코딩 (특수문자 에러 무시)
+            try:
+                text = tokenizer.decode(
+                    tokenizer.encode(prompt, add_special_tokens=False) + b.token_ids,
+                    skip_special_tokens=True,
+                    errors='ignore'
+                )
+                # 깨진 문자 제거
+                text = text.replace('�', '').replace('\ufffd', '')
+                # 출력 불가능한 문자 필터링
+                text = ''.join(char for char in text if char.isprintable() or char in [' ', '\n'])
+            except Exception:
+                text = "[decoding error]"
+            
             rows.append({
                 "단계": bs.step,
                 "순위": rank,
@@ -555,10 +594,20 @@ def try_graphviz_tree(
             
             for i, b in enumerate(shown):
                 node_name = f's{bs.step}_{i}'
-                text = tokenizer.decode(
-                    tokenizer.encode(prompt, add_special_tokens=False) + b.token_ids,
-                    skip_special_tokens=True
-                )
+                # 안전하게 디코딩
+                try:
+                    text = tokenizer.decode(
+                        tokenizer.encode(prompt, add_special_tokens=False) + b.token_ids,
+                        skip_special_tokens=True,
+                        errors='ignore'
+                    )
+                    # 깨진 문자 제거
+                    text = text.replace('�', '').replace('\ufffd', '')
+                    # 출력 불가능한 문자 필터링
+                    text = ''.join(char for char in text if char.isprintable() or char in [' ', '\n'])
+                except Exception:
+                    text = "[error]"
+                
                 text_short = text[:50].replace('"', '\\"').replace('\n', '\\n')
                 label = f"Step {bs.step}\\nscore={b.score:.2f}\\n{text_short}"
                 dot_lines.append(f'{node_name} [label="{label}"];')
@@ -730,7 +779,7 @@ def main():
             mat, ylab, xlab, tok_texts = build_heatmap_data(result["steps"], tokenizer)
             fig = plot_heatmap(
                 mat, ylab, xlab, tok_texts,
-                title="Greedy Search - 단계별 토큰 확률 분포"
+                title="Greedy Search - Token Probability Distribution by Step"
             )
             if fig:
                 st.pyplot(fig)
@@ -755,7 +804,7 @@ def main():
             mat, ylab, xlab, tok_texts = build_heatmap_data(result["bestpath_steps"], tokenizer)
             fig = plot_heatmap(
                 mat, ylab, xlab, tok_texts,
-                title="Beam Search (최고 경로) - 단계별 토큰 확률 분포"
+                title="Beam Search (Best Path) - Token Probability Distribution by Step"
             )
             if fig:
                 st.pyplot(fig)
@@ -859,12 +908,12 @@ def main():
                     color='#1f77b4', markerfacecolor='white', 
                     markeredgewidth=2
                 )
-                ax1.set_title("Beam Width vs 탐색 후보 수", fontsize=12, fontweight='bold', pad=15)
+                ax1.set_title("Beam Width vs Total Candidates", fontsize=12, fontweight='bold', pad=15)
                 ax1.set_xlabel("Beam Width", fontsize=11, fontweight='bold')
-                ax1.set_ylabel("탐색 후보 수", fontsize=11, fontweight='bold')
+                ax1.set_ylabel("Total Candidates Explored", fontsize=11, fontweight='bold')
                 ax1.grid(True, alpha=0.3, linestyle='--')
                 ax1.tick_params(labelsize=10)
-                # 값 레이블 추가
+                # Add value labels
                 for i, r in enumerate(results_data):
                     ax1.annotate(
                         str(r["탐색 후보 수"]), 
@@ -885,12 +934,12 @@ def main():
                     color='#2ca02c', markerfacecolor='white',
                     markeredgewidth=2
                 )
-                ax2.set_title("Beam Width vs 최종 로그확률", fontsize=12, fontweight='bold', pad=15)
+                ax2.set_title("Beam Width vs Final Log Probability", fontsize=12, fontweight='bold', pad=15)
                 ax2.set_xlabel("Beam Width", fontsize=11, fontweight='bold')
-                ax2.set_ylabel("최종 로그확률", fontsize=11, fontweight='bold')
+                ax2.set_ylabel("Final Log Probability", fontsize=11, fontweight='bold')
                 ax2.grid(True, alpha=0.3, linestyle='--')
                 ax2.tick_params(labelsize=10)
-                # 값 레이블 추가
+                # Add value labels
                 for i, r in enumerate(results_data):
                     ax2.annotate(
                         f"{logprobs[i]:.1f}", 
@@ -910,12 +959,12 @@ def main():
                     color='#ff7f0e', markerfacecolor='white',
                     markeredgewidth=2
                 )
-                ax3.set_title("Beam Width vs 다양성", fontsize=12, fontweight='bold', pad=15)
+                ax3.set_title("Beam Width vs Diversity", fontsize=12, fontweight='bold', pad=15)
                 ax3.set_xlabel("Beam Width", fontsize=11, fontweight='bold')
-                ax3.set_ylabel("다양성 (고유 출력 수)", fontsize=11, fontweight='bold')
+                ax3.set_ylabel("Diversity (Unique Outputs)", fontsize=11, fontweight='bold')
                 ax3.grid(True, alpha=0.3, linestyle='--')
                 ax3.tick_params(labelsize=10)
-                # 값 레이블 추가
+                # Add value labels
                 for i, r in enumerate(results_data):
                     ax3.annotate(
                         str(r["다양성"]), 
